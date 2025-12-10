@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple
@@ -67,7 +68,11 @@ def health_check():
 
 @app.get("/api/documents", response_model=DocumentsResponse, responses={500: {"model": ErrorResponse}})
 def list_documents(metadata_store: MetadataStore = Depends(_get_metadata_store)):
-    docs = [DocumentOut.model_validate(doc.model_dump()) for doc in metadata_store.list_documents()]
+    docs: list[DocumentOut] = []
+    for doc in metadata_store.list_documents():
+        payload = doc.model_dump(exclude={"local_path"})
+        payload["viewable"] = bool(doc.local_path and Path(doc.local_path).exists())
+        docs.append(DocumentOut.model_validate(payload))
     return DocumentsResponse(documents=docs)
 
 
@@ -83,26 +88,28 @@ def get_document_content(
     doc = metadata_store.get_by_id(document_id)
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-    if not doc.openai_file_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document content is unavailable")
-    try:
-        data, mime_type = rag.fetch_file_content(doc)
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        status_code = getattr(exc, "status_code", None) or status.HTTP_500_INTERNAL_SERVER_ERROR
-        if status_code == 404:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document file not found") from exc
+    # Only serve if we have a local stored copy
+    if not doc.local_path:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch document content",
-        ) from exc
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document content is unavailable locally. Please re-upload to enable viewing.",
+        )
+    file_path = Path(doc.local_path)
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document content is unavailable locally. Please re-upload to enable viewing.",
+        )
 
-    # strip control chars to avoid header injection, keep ASCII printable only
-    sanitized = "".join(ch for ch in doc.original_filename if 32 <= ord(ch) < 127 and ch not in {'"', "\\"})
-    safe_name = sanitized or f"document-{doc.id}"
+    mime_type = doc.mime_type or mimetypes.guess_type(doc.original_filename)[0] or "application/octet-stream"
+    safe_name = "".join(ch for ch in doc.original_filename if 32 <= ord(ch) < 127 and ch not in {'"', "\\"})
+    safe_name = safe_name or f"document-{doc.id}"
     headers = {"Content-Disposition": f'inline; filename="{safe_name}"'}
-    return Response(content=data, media_type=mime_type or "application/octet-stream", headers=headers)
+    return FileResponse(
+        file_path,
+        media_type=mime_type,
+        headers=headers,
+    )
 
 
 @app.post(
@@ -125,7 +132,7 @@ async def upload_files(
         )
 
     prepared: List[Tuple[str, Path, str | None]] = []
-    records = []
+    records: List[DocumentOut] = []
     try:
         for upload in files:
             ext = Path(upload.filename).suffix.lower()
@@ -149,7 +156,11 @@ async def upload_files(
 
             prepared.append((upload.filename, temp_path, upload.content_type))
 
-        records = await run_in_threadpool(rag.upload_files, prepared)
+        raw_records = await run_in_threadpool(rag.upload_files, prepared)
+        for rec in raw_records:
+            payload = rec.model_dump(exclude={"local_path"})
+            payload["viewable"] = bool(rec.local_path and Path(rec.local_path).exists())
+            records.append(DocumentOut.model_validate(payload))
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, HTTPException):
             raise
@@ -171,8 +182,7 @@ async def upload_files(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="All files failed to upload",
         )
-    documents = [DocumentOut.model_validate(record.model_dump()) for record in records]
-    return UploadResponse(documents=documents)
+    return UploadResponse(documents=records)
 
 
 @app.delete(
@@ -242,5 +252,9 @@ async def ask_question(
         )
 
     answer_text, sources = await run_in_threadpool(rag.ask, payload.question.strip())
-    source_docs = [DocumentOut.model_validate(doc.model_dump()) for doc in sources]
+    source_docs = []
+    for doc in sources:
+        payload = doc.model_dump(exclude={"local_path"})
+        payload["viewable"] = bool(doc.local_path and Path(doc.local_path).exists())
+        source_docs.append(DocumentOut.model_validate(payload))
     return QAResponse(answer=answer_text, sources=source_docs)

@@ -1,8 +1,9 @@
 import logging
 import mimetypes
+import shutil
 import time
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Iterable, Iterator, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from openai import APIConnectionError, APITimeoutError, APIStatusError, OpenAI, RateLimitError
@@ -38,13 +39,14 @@ class RAGService:
         """
         records: List[DocumentRecord] = []
         for original_filename, path, mime_type in uploads:
+            record_id = str(uuid4())
             if self.metadata_store.exists_by_filename(original_filename):
                 logger.info(
                     "Skipping duplicate upload for filename=%s (already exists in metadata)", original_filename
                 )
                 records.append(
                     DocumentRecord(
-                        id=str(uuid4()),
+                        id=record_id,
                         original_filename=original_filename,
                         openai_file_id=None,
                         vector_store_id=self.vector_store_id,
@@ -59,6 +61,7 @@ class RAGService:
             processing_status = "ready"
             openai_file_id: Optional[str] = None
             error_message: Optional[str] = None
+            local_path: Optional[str] = None
             try:
                 with path.open("rb") as f:
                     openai_file = self._execute_with_retries(
@@ -109,8 +112,11 @@ class RAGService:
                 self._cleanup_openai_file(openai_file_id, f"{processing_status} during upload")
                 openai_file_id = None
 
+            if processing_status not in {"skipped_duplicate", "failed", "retry_suggested"}:
+                local_path = self._persist_local_copy(path, record_id, original_filename)
+
             record = DocumentRecord(
-                id=str(uuid4()),
+                id=record_id,
                 original_filename=original_filename,
                 openai_file_id=openai_file_id,
                 vector_store_id=self.vector_store_id,
@@ -118,6 +124,7 @@ class RAGService:
                 mime_type=mime_type,
                 processing_status=processing_status,
                 error_message=error_message,
+                local_path=local_path,
             )
             if processing_status not in {"skipped_duplicate", "failed", "retry_suggested"}:
                 self.metadata_store.add_document(record)
@@ -202,24 +209,59 @@ class RAGService:
                 "Failed to delete orphaned OpenAI file %s (%s): %s", file_id, reason, exc, exc_info=False
             )
 
+    def _delete_local_copy(self, record: DocumentRecord) -> None:
+        if not record.local_path:
+            return
+        path = Path(record.local_path)
+        try:
+            if path.exists():
+                path.unlink()
+            # clean up empty parent dirs (record-specific)
+            if path.parent.exists():
+                try:
+                    path.parent.rmdir()
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to delete local copy for %s", record.id, exc_info=False)
+
     # Q&A flow -----------------------------------------------------------
-    def fetch_file_content(self, record: DocumentRecord) -> Tuple[bytes, str]:
+    def stream_file_content(self, record: DocumentRecord) -> Tuple[Iterator[bytes], str]:
         """
-        Download a document's content from OpenAI Files.
-        Returns: (bytes, mime_type)
+        Stream a document's content from OpenAI Files.
+        Returns: (byte iterator, mime_type)
         """
         if not record.openai_file_id:
             raise ValueError("Document has no associated OpenAI file")
-        content = self.client.files.content(record.openai_file_id)
-        try:
-            data = content.read()
-        finally:
+        response = self.client.files.content(record.openai_file_id)
+
+        def iterator():
             try:
-                content.close()
-            except Exception:
-                pass
+                yield from response.iter_bytes()
+            finally:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
         mime_type = record.mime_type or mimetypes.guess_type(record.original_filename)[0] or "application/octet-stream"
-        return data, mime_type
+        return iterator(), mime_type
+
+    def _persist_local_copy(self, src: Path, record_id: str, original_filename: str) -> Optional[str]:
+        """
+        Store a local copy of the uploaded file so it can be served back to users.
+        """
+        try:
+            safe_name = Path(original_filename).name
+            safe_name = "".join(ch for ch in safe_name if ch not in '<>:"/\\|?*') or f"document-{record_id}"
+            dest_dir = self.settings.uploads_dir / "stored" / record_id
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / safe_name
+            shutil.copy2(src, dest)
+            return str(dest)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to persist local copy for %s: %s", original_filename, exc, exc_info=False)
+            return None
 
     def delete_document(self, record: DocumentRecord) -> None:
         """
@@ -227,6 +269,7 @@ class RAGService:
         """
         openai_file_id = record.openai_file_id
         if not openai_file_id:
+            self._delete_local_copy(record)
             return
         vector_store_id = record.vector_store_id or self.vector_store_id
         if vector_store_id:
@@ -259,6 +302,7 @@ class RAGService:
                     "Failed to delete OpenAI file '%s' (file_id=%s)", record.original_filename, openai_file_id
                 )
                 raise
+        self._delete_local_copy(record)
 
     def delete_documents(self, records: Iterable[DocumentRecord]) -> None:
         for record in records:

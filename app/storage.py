@@ -17,6 +17,7 @@ class DocumentRecord(BaseModel):
     mime_type: Optional[str] = None
     processing_status: str = Field(default="ready")
     error_message: Optional[str] = None
+    local_path: Optional[str] = None
 
 
 class Metadata(BaseModel):

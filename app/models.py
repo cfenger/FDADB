@@ -14,6 +14,7 @@ class DocumentOut(BaseModel):
     mime_type: Optional[str] = None
     processing_status: str = Field(default="ready")
     error_message: Optional[str] = None
+    viewable: bool = Field(default=False, description="True if a local copy is available to stream")
 
 
 class UploadResponse(BaseModel):

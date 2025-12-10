@@ -373,10 +373,10 @@
         actions.innerHTML = `<div class="doc-meta">${hasSize ? (doc.size_bytes / 1024).toFixed(1) + " KB" : ""}</div>`;
         const viewBtn = document.createElement("button");
         viewBtn.className = "ghost secondary";
-        viewBtn.textContent = "View";
-        viewBtn.disabled = !doc.openai_file_id;
+        viewBtn.textContent = doc.viewable ? "View" : "View (unavailable)";
+        viewBtn.disabled = !doc.viewable;
         viewBtn.addEventListener("click", () => {
-          if (!doc.openai_file_id) return;
+          if (!doc.viewable) return;
           const url = `/api/documents/${doc.id}/content`;
           window.open(url, "_blank", "noopener");
         });
