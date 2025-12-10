@@ -267,8 +267,10 @@ async def ask_question(
         payload["viewable"] = bool(doc.local_path and Path(doc.local_path).exists())
         source_docs.append(DocumentOut.model_validate(payload))
 
+    doc_by_file_id = {doc.openai_file_id: doc for doc in sources if doc.openai_file_id}
     citation_items: list[Citation] = []
     for item in citations:
+        doc = doc_by_file_id.get(item.get("openai_file_id"))
         snippet = item.get("snippet") or "Snippet unavailable."
         index = item.get("citation_index") or (len(citation_items) + 1)
         citation_items.append(
@@ -277,6 +279,12 @@ async def ask_question(
                 original_filename=item.get("original_filename") or "Unknown source",
                 openai_file_id=item.get("openai_file_id"),
                 snippet=snippet,
+                document_id=(str(getattr(doc, "id", "")) or None) if doc else None,
+                viewable=bool(
+                    doc
+                    and getattr(doc, "local_path", None)
+                    and Path(doc.local_path).exists()
+                ),
             )
         )
 

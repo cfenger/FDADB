@@ -9,6 +9,8 @@ class Citation(BaseModel):
     original_filename: str
     openai_file_id: Optional[str] = None
     snippet: Optional[str] = None
+    document_id: Optional[str] = None
+    viewable: bool = False
 
 
 class DocumentOut(BaseModel):

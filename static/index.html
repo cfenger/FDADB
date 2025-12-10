@@ -207,6 +207,27 @@
       min-height: 60px;
     }
     .sources { margin-top: 10px; color: var(--muted); font-size: 14px; }
+    .source-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .source-snippet {
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin-top: 6px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    #supporting-passages { margin-top: 8px; }
+    .supporting-passage {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-top: 8px;
+      background: rgba(68, 209, 182, 0.05);
+      font-size: 14px;
+      line-height: 1.45;
+    }
     .history {
       margin-top: 16px;
       border-top: 1px solid var(--border);
@@ -290,6 +311,7 @@
           <div class="muted">Latest answer</div>
           <div id="answer" class="answer"></div>
           <div id="sources" class="sources"></div>
+          <div id="supporting-passages"></div>
         </div>
         <div class="history">
           <div class="muted">This session</div>
@@ -619,6 +641,8 @@
         }
         const data = await res.json();
         renderAnswer(data);
+        renderSources(data, sourcesEl);
+        renderSupportingPassages(data);
         state.history.unshift({
           question,
           answer: data.answer,
@@ -637,7 +661,6 @@
 
     function renderAnswer(data) {
       answerEl.textContent = data.answer || "";
-      renderSources(data, sourcesEl);
     }
 
     function renderHistory() {
@@ -669,19 +692,51 @@
       targetEl.innerHTML = "";
       const citations = data.citations || [];
       if (citations.length) {
+        const heading = document.createElement("div");
+        heading.textContent = "Sources:";
+        targetEl.appendChild(heading);
+
         const list = document.createElement("ul");
         list.style.paddingLeft = "18px";
         list.style.margin = "6px 0";
         citations.forEach((c) => {
           const li = document.createElement("li");
-          const idx = c.citation_index ?? "?";
-          const snippet = c.snippet || "Snippet unavailable.";
-          li.textContent = `[${idx}] ${c.original_filename} - ${snippet}`;
+          const idx = c.citation_index || "";
+          const header = document.createElement("div");
+          header.className = "source-header";
+          const title = document.createElement("span");
+          title.textContent = `[${idx}] ${c.original_filename}`;
+          header.appendChild(title);
+
+          const btn = document.createElement("button");
+          btn.textContent = "View passage";
+          btn.className = "ghost secondary";
+
+          const snippetDiv = document.createElement("div");
+          snippetDiv.className = "source-snippet";
+          snippetDiv.style.display = "none";
+          snippetDiv.textContent = c.snippet || "Snippet unavailable.";
+
+          btn.addEventListener("click", () => {
+            snippetDiv.style.display = snippetDiv.style.display === "none" ? "block" : "none";
+          });
+
+          header.appendChild(btn);
+
+          if (c.viewable && c.document_id) {
+            const openLink = document.createElement("a");
+            openLink.href = `/api/documents/${encodeURIComponent(c.document_id)}/content`;
+            openLink.target = "_blank";
+            openLink.rel = "noopener noreferrer";
+            openLink.textContent = "Open document";
+            openLink.className = "ghost";
+            header.appendChild(openLink);
+          }
+
+          li.appendChild(header);
+          li.appendChild(snippetDiv);
           list.appendChild(li);
         });
-        const heading = document.createElement("div");
-        heading.textContent = "Sources:";
-        targetEl.appendChild(heading);
         targetEl.appendChild(list);
         return;
       }
@@ -691,6 +746,34 @@
       } else {
         targetEl.textContent = isHistory ? "Sources: n/a" : "Sources: not provided.";
       }
+    }
+
+    function renderSupportingPassages(data) {
+      const container = document.getElementById("supporting-passages");
+      if (!container) return;
+
+      container.innerHTML = "";
+
+      const citations = data.citations || [];
+      if (!citations.length) return;
+
+      const heading = document.createElement("div");
+      heading.textContent = "Supporting passages:";
+      container.appendChild(heading);
+
+      citations.forEach((c) => {
+        const block = document.createElement("div");
+        block.className = "supporting-passage";
+        const idx = c.citation_index || "";
+        const title = document.createElement("strong");
+        title.textContent = `[${idx}] ${c.original_filename}`;
+        block.appendChild(title);
+        block.appendChild(document.createElement("br"));
+        const snippetText = document.createElement("span");
+        snippetText.textContent = c.snippet || "Snippet unavailable.";
+        block.appendChild(snippetText);
+        container.appendChild(block);
+      });
     }
 
     fetchDocuments();
