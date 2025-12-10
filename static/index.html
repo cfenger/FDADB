@@ -168,6 +168,18 @@
       justify-content: space-between;
       gap: 12px;
     }
+    .doc-summary {
+      margin-top: 6px;
+      color: #eafff6;
+      font-weight: 700;
+      font-size: 14px;
+      display: inline-block;
+      background: rgba(68, 209, 182, 0.16);
+      border: 1px solid rgba(68, 209, 182, 0.7);
+      padding: 4px 10px;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
     .doc-meta { color: var(--muted); font-size: 13px; }
     textarea, input[type="text"] {
       width: 100%;
@@ -254,7 +266,10 @@
       </div>
       <div>
         <div class="doc-header">
-          <div class="muted">Known documents</div>
+          <div>
+            <div class="muted">Known documents</div>
+            <div id="doc-summary" class="doc-summary"></div>
+          </div>
           <button id="delete-all-btn" class="ghost danger">Delete all</button>
         </div>
         <div id="doc-status" class="status"></div>
@@ -288,6 +303,7 @@
     const docListEl = document.getElementById("doc-list");
     const uploadStatus = document.getElementById("upload-status");
     const docStatus = document.getElementById("doc-status");
+    const docSummaryEl = document.getElementById("doc-summary");
     const askStatus = document.getElementById("ask-status");
     const historyEl = document.getElementById("history-items");
     const answerEl = document.getElementById("answer");
@@ -334,6 +350,7 @@
 
     function renderDocuments() {
       docListEl.innerHTML = "";
+      if (docSummaryEl) docSummaryEl.textContent = "Total: 0 files (0.00 GB)";
       deleteAllBtn.disabled = !state.documents.length;
       if (!state.documents.length) {
         docListEl.innerHTML = `<div class="muted">No documents yet. Upload to get started.</div>`;
@@ -390,6 +407,15 @@
         card.appendChild(actions);
         docListEl.appendChild(card);
       });
+      if (docSummaryEl) {
+        const totalFiles = state.documents.length;
+        const totalBytes = state.documents.reduce(
+          (sum, doc) => sum + Number(doc.size_bytes || 0),
+          0
+        );
+        const totalGB = totalBytes / (1024 * 1024 * 1024);
+        docSummaryEl.textContent = `Total: ${totalFiles} file${totalFiles === 1 ? "" : "s"} (${totalGB.toFixed(2)} GB)`;
+      }
     }
 
     async function uploadSingleFile(file) {
@@ -650,7 +676,7 @@
           const li = document.createElement("li");
           const idx = c.citation_index ?? "?";
           const snippet = c.snippet || "Snippet unavailable.";
-          li.textContent = `[${idx}] ${c.original_filename} — ${snippet}`;
+          li.textContent = `[${idx}] ${c.original_filename} - ${snippet}`;
           list.appendChild(li);
         });
         const heading = document.createElement("div");
