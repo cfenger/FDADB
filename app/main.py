@@ -1,5 +1,6 @@
 import logging
 import mimetypes
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple
@@ -222,15 +223,22 @@ def delete_all_documents(
     rag: RAGService = Depends(_get_rag_service),
 ):
     docs = metadata_store.list_documents()
-    try:
-        rag.delete_documents(docs)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete all documents",
-        ) from exc
+    total = len(docs)
+    if not docs:
+        return DeleteAllResponse(deleted=0)
+
+    def _background_delete(records):
+        try:
+            rag.delete_documents(records)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Background delete_all_documents failed: %s", exc)
+
+    # Fire-and-forget deletion so the HTTP request doesn't hang on slow OpenAI calls.
+    thread = threading.Thread(target=_background_delete, args=(docs,), daemon=True)
+    thread.start()
+
     metadata_store.clear_documents()
-    return DeleteAllResponse(deleted=len(docs))
+    return DeleteAllResponse(deleted=total)
 
 
 @app.post(
