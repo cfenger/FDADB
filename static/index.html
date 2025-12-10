@@ -79,6 +79,7 @@
     nav button:hover {
       border-color: var(--accent);
     }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
     .ghost {
       background: transparent;
       color: var(--text);
@@ -370,6 +371,16 @@
         actions.style.alignItems = "flex-end";
         actions.style.gap = "6px";
         actions.innerHTML = `<div class="doc-meta">${hasSize ? (doc.size_bytes / 1024).toFixed(1) + " KB" : ""}</div>`;
+        const viewBtn = document.createElement("button");
+        viewBtn.className = "ghost secondary";
+        viewBtn.textContent = "View";
+        viewBtn.disabled = !doc.openai_file_id;
+        viewBtn.addEventListener("click", () => {
+          if (!doc.openai_file_id) return;
+          const url = `/api/documents/${doc.id}/content`;
+          window.open(url, "_blank", "noopener");
+        });
+        actions.appendChild(viewBtn);
         const deleteBtn = document.createElement("button");
         deleteBtn.className = "ghost danger";
         deleteBtn.textContent = "Delete";

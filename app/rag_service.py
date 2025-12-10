@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import time
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Set, Tuple
@@ -202,6 +203,24 @@ class RAGService:
             )
 
     # Q&A flow -----------------------------------------------------------
+    def fetch_file_content(self, record: DocumentRecord) -> Tuple[bytes, str]:
+        """
+        Download a document's content from OpenAI Files.
+        Returns: (bytes, mime_type)
+        """
+        if not record.openai_file_id:
+            raise ValueError("Document has no associated OpenAI file")
+        content = self.client.files.content(record.openai_file_id)
+        try:
+            data = content.read()
+        finally:
+            try:
+                content.close()
+            except Exception:
+                pass
+        mime_type = record.mime_type or mimetypes.guess_type(record.original_filename)[0] or "application/octet-stream"
+        return data, mime_type
+
     def delete_document(self, record: DocumentRecord) -> None:
         """
         Removes a document's OpenAI resources (detach from vector store, delete file).

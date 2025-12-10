@@ -71,6 +71,40 @@ def list_documents(metadata_store: MetadataStore = Depends(_get_metadata_store))
     return DocumentsResponse(documents=docs)
 
 
+@app.get(
+    "/api/documents/{document_id}/content",
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
+def get_document_content(
+    document_id: str,
+    metadata_store: MetadataStore = Depends(_get_metadata_store),
+    rag: RAGService = Depends(_get_rag_service),
+):
+    doc = metadata_store.get_by_id(document_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    if not doc.openai_file_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document content is unavailable")
+    try:
+        data, mime_type = rag.fetch_file_content(doc)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        status_code = getattr(exc, "status_code", None) or status.HTTP_500_INTERNAL_SERVER_ERROR
+        if status_code == 404:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document file not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch document content",
+        ) from exc
+
+    # strip control chars to avoid header injection, keep ASCII printable only
+    sanitized = "".join(ch for ch in doc.original_filename if 32 <= ord(ch) < 127 and ch not in {'"', "\\"})
+    safe_name = sanitized or f"document-{doc.id}"
+    headers = {"Content-Disposition": f'inline; filename="{safe_name}"'}
+    return Response(content=data, media_type=mime_type or "application/octet-stream", headers=headers)
+
+
 @app.post(
     "/api/upload",
     response_model=UploadResponse,

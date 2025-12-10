@@ -9,6 +9,7 @@ Python FastAPI app that lets you upload company documents once and ask grounded 
 - Q&A endpoint calls the Responses API with `file_search` configured against the shared vector store and returns answers plus source citations.
 - Lightweight web UI (vanilla JS) with loading/error states, session-only history, and basic visual polish.
 - Delete individual documents or clear all documents (removes OpenAI file + detaches from the shared vector store, then drops local metadata).
+- View the original uploaded file contents directly from the document list.
 - Uploads are deduplicated by filename (case-insensitive); duplicate filenames in later uploads are skipped automatically while the rest of the batch continues.
 - Upload robustness: configurable indexing timeout, per-file statuses (`ready`, `indexing`, `failed`, `retry_suggested`, `skipped_duplicate`), retry/backoff for transient OpenAI errors, and client-side throttled uploads with a retry button for failed files.
 
@@ -41,6 +42,7 @@ Open http://localhost:8000 to use the UI.
 
 ## API
 - `GET /api/documents` - list known documents.
+- `GET /api/documents/{document_id}/content` - download/view the stored file for a document.
 - `POST /api/upload` (multipart, `files`) - uploads files, stores them in the shared vector store, and records metadata.
 - `POST /api/ask` (JSON `{"question": "..."}`) - runs Responses API with File Search and returns `answer` plus `sources`.
 - `DELETE /api/documents/{document_id}` - remove a single document (OpenAI file + vector store entry + metadata).
