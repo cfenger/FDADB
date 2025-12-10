@@ -308,21 +308,83 @@ class RAGService:
         for record in records:
             self.delete_document(record)
 
-    def ask(self, question: str) -> Tuple[str, List[DocumentRecord]]:
+    def ask(self, question: str) -> Tuple[str, List[DocumentRecord], List[dict]]:
         response = self.client.responses.create(
             model=self.settings.qa_model,
-            input=[{"role": "user", "content": question}],
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant using the provided FDA documents via file_search. "
+                        "Every time you state a fact that comes from one or more documents, you MUST add inline citations like [1], [2] immediately after the sentence or clause. "
+                        "The numbers must match the numbered sources list. If you do not use any documents, do not add citations."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ],
             tools=[{"type": "file_search", "vector_store_ids": [self.vector_store_id]}],
+            tool_choice="required",
+            include=["file_search_call.results"],
         )
+        try:
+            logger.info("Responses payload (truncated): %s", response.model_dump(exclude_none=True))
+        except Exception:  # noqa: BLE001
+            logger.info("Responses payload (fallback str): %s", response)
 
         answer_text = self._extract_output_text(response)
-        file_ids = self._extract_citation_ids(response)
+        citation_details = self._extract_citations(response)
+        snippet_map = self._extract_file_search_snippets(response)
+
+        # If no citations came back, fall back to unique file IDs for sources
+        fallback_file_ids = list(self._extract_citation_ids(response))
+
+        citation_payload: List[dict] = []
+        ordered_file_ids: List[str] = []
+
+        if citation_details:
+            unique_by_file: dict[str, dict] = {}
+            for entry in citation_details:
+                fid = entry.get("file_id")
+                if not fid or fid in unique_by_file:
+                    continue
+                unique_by_file[fid] = entry
+            max_citations = 5
+            ordered_file_ids = list(unique_by_file.keys())[:max_citations]
+            for idx, fid in enumerate(ordered_file_ids, start=1):
+                doc = self.metadata_store.get_by_file_id(fid)
+                citation_payload.append(
+                    {
+                        "citation_index": idx,
+                        "original_filename": (doc.original_filename if doc else fid) or "Unknown source",
+                        "openai_file_id": fid,
+                        "snippet": snippet_map.get(fid),
+                    }
+                )
+        else:
+            # No annotations; we still want to return sources if we have them
+            ordered_file_ids = fallback_file_ids
+
         sources: List[DocumentRecord] = []
-        for file_id in file_ids:
+        for file_id in ordered_file_ids:
             doc = self.metadata_store.get_by_file_id(file_id)
             if doc:
                 sources.append(doc)
-        return answer_text, sources
+
+        # Ensure the answer shows inline markers when citations exist
+        if citation_payload:
+            indices = [c["citation_index"] for c in citation_payload if c.get("citation_index")]
+            indices = indices[:3]
+            if indices and not any(f"[{i}]" in answer_text for i in indices):
+                parts = answer_text.split("\n\n")
+                inline_indices = indices
+                if parts:
+                    for idx in range(len(parts) - 1, -1, -1):
+                        if parts[idx].strip():
+                            parts[idx] = parts[idx].rstrip() + " " + " ".join(f"[{i}]" for i in inline_indices)
+                            break
+                    answer_text = "\n\n".join(parts)
+
+        return answer_text, sources, citation_payload
 
     @staticmethod
     def _extract_output_text(response) -> str:
@@ -351,36 +413,104 @@ class RAGService:
         return ""
 
     @staticmethod
+    def _extract_file_search_snippets(response) -> dict[str, str]:
+        """
+        Extract the first snippet per file_id from file_search tool call results.
+        """
+        snippets: dict[str, str] = {}
+        output = getattr(response, "output", None) or []
+        for item in output:
+            results = None
+            if getattr(item, "type", None) == "file_search_call":
+                results = getattr(item, "results", None) or []
+            elif isinstance(item, dict) and item.get("type") == "file_search_call":
+                results = item.get("results", []) or []
+            if not results:
+                continue
+            for res in results:
+                fid = getattr(res, "file_id", None) or (res.get("file_id") if isinstance(res, dict) else None)
+                text_val = getattr(res, "text", None) or (res.get("text") if isinstance(res, dict) else None)
+                if not fid or not text_val or fid in snippets:
+                    continue
+                snippet = " ".join(text_val.split()).strip()
+                if len(snippet) > 200:
+                    snippet = snippet[:200].rstrip() + "..."
+                snippets[fid] = snippet
+        return snippets
+
+    @staticmethod
+    def _extract_citations(response) -> List[dict]:
+        """
+        Return a list of dicts in annotation order (do not deduplicate):
+        [{"file_id": "..."}]
+        """
+        citations: List[dict] = []
+        output = getattr(response, "output", None) or []
+        for item in output:
+            content_list = getattr(item, "content", None) or []
+            if isinstance(item, dict):
+                content_list = item.get("content", []) or []
+
+            for block in content_list:
+                annotations = getattr(block, "annotations", None)
+
+                # Fallback for dict-like structures
+                if annotations is None and isinstance(block, dict):
+                    text_obj = block.get("text", {}) or {}
+                    if isinstance(text_obj, dict):
+                        annotations = text_obj.get("annotations", []) or []
+                    else:
+                        annotations = getattr(text_obj, "annotations", None) or []
+
+                if not annotations:
+                    continue
+
+                for ann in annotations:
+                    ann_type = getattr(ann, "type", None)
+                    if ann_type == "file_citation":
+                        fid = getattr(ann, "file_id", None)
+                    elif isinstance(ann, dict) and ann.get("type") == "file_citation":
+                        file_citation = ann.get("file_citation", {}) or {}
+                        fid = file_citation.get("file_id")
+                    else:
+                        fid = None
+                    if fid:
+                        citations.append({"file_id": fid})
+        return citations
+
+    @staticmethod
     def _extract_citation_ids(response) -> Set[str]:
         ids: Set[str] = set()
         output = getattr(response, "output", None) or []
         for item in output:
+            content_list = getattr(item, "content", None) or []
             if isinstance(item, dict):
-                content = item.get("content", [])
-            else:
-                content = getattr(item, "content", None) or []
-            for block in content:
-                if isinstance(block, dict):
-                    text_obj = block.get("text", {}) or {}
-                else:
-                    text_obj = getattr(block, "text", None) or {}
+                content_list = item.get("content", []) or []
 
-                if isinstance(text_obj, dict):
-                    annotations = text_obj.get("annotations", []) or []
-                else:
-                    annotations = getattr(text_obj, "annotations", None) or []
+            for block in content_list:
+                annotations = getattr(block, "annotations", None)
+                if annotations is None and isinstance(block, dict):
+                    text_obj = block.get("text", {}) or {}
+                    if isinstance(text_obj, dict):
+                        annotations = text_obj.get("annotations", []) or []
+                    else:
+                        annotations = getattr(text_obj, "annotations", None) or []
+
+                if not annotations:
+                    continue
 
                 for ann in annotations:
-                    if isinstance(ann, dict):
-                        ann_type = ann.get("type")
+                    ann_type = getattr(ann, "type", None)
+                    if ann_type == "file_citation":
+                        file_id = getattr(ann, "file_id", None)
+                    elif isinstance(ann, dict):
+                        if ann.get("type") != "file_citation":
+                            continue
                         file_citation = ann.get("file_citation", {}) or {}
                         file_id = file_citation.get("file_id")
                     else:
-                        ann_type = getattr(ann, "type", None)
-                        file_citation = getattr(ann, "file_citation", None)
-                        file_id = getattr(file_citation, "file_id", None) if file_citation else None
-                    if ann_type != "file_citation":
-                        continue
+                        file_id = None
+
                     if file_id:
                         ids.add(file_id)
         return ids

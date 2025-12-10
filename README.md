@@ -6,7 +6,7 @@ Python FastAPI app that lets you upload company documents once and ask grounded 
 - Two screens: upload documents and ask questions (single shared environment, no auth).
 - Upload multiple files with type/size validation, push to OpenAI file storage, and attach to a single shared vector store.
 - Persist minimal metadata (file name, OpenAI file id, vector store id, timestamps) in `data/metadata.json`.
-- Q&A endpoint calls the Responses API with `file_search` configured against the shared vector store and returns answers plus source citations.
+- Q&A endpoint calls the Responses API with `file_search` configured against the shared vector store (tools include the vector store id) and returns answers plus numbered source citations (with snippets). Answers include inline markers like `[1]` that match the “Sources” list.
 - Lightweight web UI (vanilla JS) with loading/error states, session-only history, and basic visual polish.
 - Delete individual documents or clear all documents (removes OpenAI file + detaches from the shared vector store, then drops local metadata).
 - View the original uploaded file contents directly from the document list (local copies are stored for new uploads).
@@ -44,7 +44,7 @@ Open http://localhost:8000 to use the UI.
 - `GET /api/documents` - list known documents.
 - `GET /api/documents/{document_id}/content` - download/view the stored file for a document (requires a locally stored copy).
 - `POST /api/upload` (multipart, `files`) - uploads files, stores them in the shared vector store, and records metadata.
-- `POST /api/ask` (JSON `{"question": "..."}`) - runs Responses API with File Search and returns `answer` plus `sources`.
+- `POST /api/ask` (JSON `{"question": "..."}`) - runs Responses API with File Search and returns `answer`, `sources`, and rich `citations` (numbered with snippets).
 - `DELETE /api/documents/{document_id}` - remove a single document (OpenAI file + vector store entry + metadata).
 - `DELETE /api/documents` - remove all documents.
 - `GET /health` - simple health probe.
@@ -76,3 +76,4 @@ curl -H "Content-Type: application/json" -d "{\"question\": \"What is the PTO po
 - Duplicate uploads are skipped by filename (case-insensitive) and reported in the upload response, but they are not stored again.
 - Recommended upload limits: defaults are max 10 files per request (`MAX_FILES_PER_REQUEST`) and 10 MB per file (`MAX_FILE_SIZE_MB`). Uploads are throttled on the client to avoid OpenAI rate limits, with exponential backoff on transient OpenAI errors (429/5xx/timeouts).
 - On timeouts, files are marked `indexing` with a timeout message; on transient errors, files are marked `retry_suggested` so you can re-run them via the "Retry failed uploads" button. Local validation errors (size/type) return 400 with a clear message.
+- In answers, inline markers like `[1]` correspond to the numbered sources list, which shows the original filename and a short snippet from the cited text. If no snippet is available, the source still appears with an "snippet unavailable" note.

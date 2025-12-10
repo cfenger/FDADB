@@ -593,7 +593,12 @@
         }
         const data = await res.json();
         renderAnswer(data);
-        state.history.unshift({ question, answer: data.answer, sources: data.sources || [] });
+        state.history.unshift({
+          question,
+          answer: data.answer,
+          sources: data.sources || [],
+          citations: data.citations || [],
+        });
         renderHistory();
         askStatus.textContent = "";
       } catch (err) {
@@ -606,12 +611,7 @@
 
     function renderAnswer(data) {
       answerEl.textContent = data.answer || "";
-      if (data.sources && data.sources.length) {
-        const names = data.sources.map((s) => s.original_filename).join(", ");
-        sourcesEl.textContent = `Sources: ${names}`;
-      } else {
-        sourcesEl.textContent = "Sources: not provided.";
-      }
+      renderSources(data, sourcesEl);
     }
 
     function renderHistory() {
@@ -623,17 +623,48 @@
       state.history.forEach((entry) => {
         const item = document.createElement("div");
         item.className = "history-item";
-        item.innerHTML = `
-          <div class="label">Q</div>
-          <div>${entry.question}</div>
-          <div class="label" style="margin-top:10px;">A</div>
-          <div>${entry.answer}</div>
-          <div class="sources" style="margin-top:8px;">Sources: ${
-            entry.sources?.map((s) => s.original_filename).join(", ") || "n/a"
-          }</div>
-        `;
+        const q = document.createElement("div");
+        q.innerHTML = `<div class="label">Q</div><div>${entry.question}</div>`;
+        const a = document.createElement("div");
+        a.innerHTML = `<div class="label" style="margin-top:10px;">A</div><div>${entry.answer}</div>`;
+        const sourcesWrapper = document.createElement("div");
+        sourcesWrapper.className = "sources";
+        sourcesWrapper.style.marginTop = "8px";
+        renderSources(entry, sourcesWrapper, true);
+        item.appendChild(q);
+        item.appendChild(a);
+        item.appendChild(sourcesWrapper);
         historyEl.appendChild(item);
       });
+    }
+
+    function renderSources(data, targetEl, isHistory = false) {
+      if (!targetEl) return;
+      targetEl.innerHTML = "";
+      const citations = data.citations || [];
+      if (citations.length) {
+        const list = document.createElement("ul");
+        list.style.paddingLeft = "18px";
+        list.style.margin = "6px 0";
+        citations.forEach((c) => {
+          const li = document.createElement("li");
+          const idx = c.citation_index ?? "?";
+          const snippet = c.snippet || "Snippet unavailable.";
+          li.textContent = `[${idx}] ${c.original_filename} — ${snippet}`;
+          list.appendChild(li);
+        });
+        const heading = document.createElement("div");
+        heading.textContent = "Sources:";
+        targetEl.appendChild(heading);
+        targetEl.appendChild(list);
+        return;
+      }
+      if (data.sources && data.sources.length) {
+        const names = data.sources.map((s) => s.original_filename).join(", ");
+        targetEl.textContent = `Sources: ${names}`;
+      } else {
+        targetEl.textContent = isHistory ? "Sources: n/a" : "Sources: not provided.";
+      }
     }
 
     fetchDocuments();

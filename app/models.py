@@ -4,6 +4,13 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class Citation(BaseModel):
+    citation_index: int
+    original_filename: str
+    openai_file_id: Optional[str] = None
+    snippet: Optional[str] = None
+
+
 class DocumentOut(BaseModel):
     id: str
     original_filename: str
@@ -32,6 +39,10 @@ class QARequest(BaseModel):
 class QAResponse(BaseModel):
     answer: str
     sources: List[DocumentOut]
+    citations: List[Citation] = Field(
+        default_factory=list,
+        description="Per-answer citation details in the order they appear in the answer",
+    )
 
 
 class ErrorResponse(BaseModel):

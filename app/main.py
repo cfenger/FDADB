@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import Settings, get_settings
 from .models import (
+    Citation,
     DeleteAllResponse,
     DocumentOut,
     DocumentsResponse,
@@ -251,10 +252,24 @@ async def ask_question(
             detail="No documents uploaded yet. Please upload files before asking questions.",
         )
 
-    answer_text, sources = await run_in_threadpool(rag.ask, payload.question.strip())
+    answer_text, sources, citations = await run_in_threadpool(rag.ask, payload.question.strip())
     source_docs = []
     for doc in sources:
         payload = doc.model_dump(exclude={"local_path"})
         payload["viewable"] = bool(doc.local_path and Path(doc.local_path).exists())
         source_docs.append(DocumentOut.model_validate(payload))
-    return QAResponse(answer=answer_text, sources=source_docs)
+
+    citation_items: list[Citation] = []
+    for item in citations:
+        snippet = item.get("snippet") or "Snippet unavailable."
+        index = item.get("citation_index") or (len(citation_items) + 1)
+        citation_items.append(
+            Citation(
+                citation_index=index,
+                original_filename=item.get("original_filename") or "Unknown source",
+                openai_file_id=item.get("openai_file_id"),
+                snippet=snippet,
+            )
+        )
+
+    return QAResponse(answer=answer_text, sources=source_docs, citations=citation_items)
