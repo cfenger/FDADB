@@ -1,0 +1,8 @@
+Security Policy Highlights
+--------------------------
+
+- All customer data is encrypted at rest (AES-256) and in transit (TLS 1.2+).
+- Laptop disk encryption is mandatory; mobile device management enforces screen lock after 5 minutes.
+- Production access requires MFA and is restricted to on-call SREs.
+- Backups run nightly with a 30-day retention policy.
+- Incident response: declare within 15 minutes, convene response lead, and log all actions in the incident doc.
