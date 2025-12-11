@@ -217,6 +217,54 @@
       background: rgba(255, 255, 255, 0.03);
       color: var(--text);
       line-height: 1.45;
+      max-height: 3.6em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      cursor: pointer;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.9);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-backdrop.active { display: flex; }
+    .modal {
+      background: #0b1428;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      max-width: 900px;
+      width: min(90%, 900px);
+      max-height: 80vh;
+      box-shadow: var(--shadow);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .modal-body {
+      margin-top: 4px;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .highlight {
+      background: rgba(250, 204, 21, 0.3);
+      border-radius: 3px;
+      padding: 0 2px;
     }
     .history {
       margin-top: 16px;
@@ -310,6 +358,16 @@
     </section>
   </div>
 
+  <div id="passage-modal-backdrop" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <div id="passage-modal-title" class="muted"></div>
+        <button id="passage-modal-close" class="ghost">Close</button>
+      </div>
+      <div id="passage-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
   <script>
     const docListEl = document.getElementById("doc-list");
     const uploadStatus = document.getElementById("upload-status");
@@ -325,10 +383,63 @@
     const askBtn = document.getElementById("ask-btn");
     const fileInput = document.getElementById("file-input");
     const questionInput = document.getElementById("question");
+    const passageModalBackdrop = document.getElementById("passage-modal-backdrop");
+    const passageModalTitle = document.getElementById("passage-modal-title");
+    const passageModalBody = document.getElementById("passage-modal-body");
+    const passageModalClose = document.getElementById("passage-modal-close");
 
     const MAX_CONCURRENT_UPLOADS = 2;
     let retryQueue = [];
     const state = { documents: [], history: [] };
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function highlightPassage(text, query) {
+      if (!text) return "";
+      const escaped = escapeHtml(text);
+      if (!query) return escaped;
+      const terms = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 3);
+      if (!terms.length) return escaped;
+      let result = escaped;
+      terms.forEach((term) => {
+        const pattern = term.replace(/[.*+^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`(${pattern})`, "ig");
+        result = result.replace(re, '<span class="highlight">$1</span>');
+      });
+      return result;
+    }
+
+    function openPassageModal(title, text, questionText = "") {
+      passageModalTitle.textContent = title || "";
+      passageModalBody.innerHTML = highlightPassage(text || "Snippet unavailable.", questionText);
+      passageModalBackdrop.classList.add("active");
+    }
+
+    function closePassageModal() {
+      passageModalBackdrop.classList.remove("active");
+      passageModalTitle.textContent = "";
+      passageModalBody.textContent = "";
+    }
+
+    passageModalClose.addEventListener("click", closePassageModal);
+    passageModalBackdrop.addEventListener("click", (event) => {
+      if (event.target === passageModalBackdrop) {
+        closePassageModal();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && passageModalBackdrop.classList.contains("active")) {
+        closePassageModal();
+      }
+    });
 
     function switchPanel(target) {
       document.getElementById("upload-panel").classList.remove("active");
@@ -629,6 +740,7 @@
           throw new Error(error.detail || "Request failed");
         }
         const data = await res.json();
+        data.question = question;
         renderAnswer(data);
         renderSources(data, sourcesEl);
         state.history.unshift({
@@ -682,49 +794,54 @@
       if (citations.length) {
         const heading = document.createElement("div");
         heading.textContent = "Sources:";
-        targetEl.appendChild(heading);
+      targetEl.appendChild(heading);
 
-        const list = document.createElement("ul");
-        list.style.paddingLeft = "18px";
-        list.style.margin = "6px 0";
-        citations.forEach((c) => {
-          const li = document.createElement("li");
-          const idx = c.citation_index || "";
-          const header = document.createElement("div");
-          header.className = "source-header";
-          const title = document.createElement("span");
-          title.textContent = `[${idx}] ${c.original_filename}`;
-          header.appendChild(title);
+      const list = document.createElement("ul");
+      list.style.paddingLeft = "18px";
+      list.style.margin = "6px 0";
+      const questionText = data.question || "";
 
-          const btn = document.createElement("button");
-          btn.textContent = "View passage";
-          btn.className = "ghost secondary";
+      citations.forEach((c) => {
+        const li = document.createElement("li");
+        const idx = c.citation_index || "";
+        const header = document.createElement("div");
+        header.className = "source-header";
 
-          const snippetDiv = document.createElement("div");
-          snippetDiv.className = "source-snippet";
-          snippetDiv.style.display = "none";
-          snippetDiv.textContent = c.snippet || "Snippet unavailable.";
+        const title = document.createElement("span");
+        title.textContent = `[${idx}] ${c.original_filename}`;
+        header.appendChild(title);
 
-          btn.addEventListener("click", () => {
-            snippetDiv.style.display = snippetDiv.style.display === "none" ? "block" : "none";
-          });
+        const btn = document.createElement("button");
+        btn.textContent = "View passage";
+        btn.className = "ghost secondary";
 
-          header.appendChild(btn);
+        const snippetText = c.snippet || "Snippet unavailable.";
+        const snippetDiv = document.createElement("div");
+        snippetDiv.className = "source-snippet";
+        snippetDiv.textContent = snippetText;
 
-          if (c.viewable && c.document_id) {
-            const openLink = document.createElement("a");
-            openLink.href = `/api/documents/${encodeURIComponent(c.document_id)}/content`;
-            openLink.target = "_blank";
-            openLink.rel = "noopener noreferrer";
-            openLink.textContent = "Open document";
-            openLink.className = "ghost";
-            header.appendChild(openLink);
-          }
+        const openFull = () =>
+          openPassageModal(title.textContent, snippetText, questionText);
 
-          li.appendChild(header);
-          li.appendChild(snippetDiv);
-          list.appendChild(li);
-        });
+        btn.addEventListener("click", openFull);
+        snippetDiv.addEventListener("click", openFull);
+
+        header.appendChild(btn);
+
+        if (c.viewable && c.document_id) {
+          const openLink = document.createElement("a");
+          openLink.href = `/api/documents/${encodeURIComponent(c.document_id)}/content`;
+          openLink.target = "_blank";
+          openLink.rel = "noopener noreferrer";
+          openLink.textContent = "Open document";
+          openLink.className = "ghost";
+          header.appendChild(openLink);
+        }
+
+        li.appendChild(header);
+        li.appendChild(snippetDiv);
+        list.appendChild(li);
+      });
         targetEl.appendChild(list);
         return;
       }

@@ -483,8 +483,6 @@ class RAGService:
                 if not fid or not text_val or fid in snippets:
                     continue
                 snippet = " ".join(text_val.split()).strip()
-                if len(snippet) > 200:
-                    snippet = snippet[:200].rstrip() + "..."
                 snippets[fid] = snippet
         return snippets
 
