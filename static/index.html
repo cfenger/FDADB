@@ -218,16 +218,6 @@
       color: var(--text);
       line-height: 1.45;
     }
-    #supporting-passages { margin-top: 8px; }
-    .supporting-passage {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
-      margin-top: 8px;
-      background: rgba(68, 209, 182, 0.05);
-      font-size: 14px;
-      line-height: 1.45;
-    }
     .history {
       margin-top: 16px;
       border-top: 1px solid var(--border);
@@ -311,7 +301,6 @@
           <div class="muted">Latest answer</div>
           <div id="answer" class="answer"></div>
           <div id="sources" class="sources"></div>
-          <div id="supporting-passages"></div>
         </div>
         <div class="history">
           <div class="muted">This session</div>
@@ -642,7 +631,6 @@
         const data = await res.json();
         renderAnswer(data);
         renderSources(data, sourcesEl);
-        renderSupportingPassages(data);
         state.history.unshift({
           question,
           answer: data.answer,
@@ -746,34 +734,6 @@
       } else {
         targetEl.textContent = isHistory ? "Sources: n/a" : "Sources: not provided.";
       }
-    }
-
-    function renderSupportingPassages(data) {
-      const container = document.getElementById("supporting-passages");
-      if (!container) return;
-
-      container.innerHTML = "";
-
-      const citations = data.citations || [];
-      if (!citations.length) return;
-
-      const heading = document.createElement("div");
-      heading.textContent = "Supporting passages:";
-      container.appendChild(heading);
-
-      citations.forEach((c) => {
-        const block = document.createElement("div");
-        block.className = "supporting-passage";
-        const idx = c.citation_index || "";
-        const title = document.createElement("strong");
-        title.textContent = `[${idx}] ${c.original_filename}`;
-        block.appendChild(title);
-        block.appendChild(document.createElement("br"));
-        const snippetText = document.createElement("span");
-        snippetText.textContent = c.snippet || "Snippet unavailable.";
-        block.appendChild(snippetText);
-        container.appendChild(block);
-      });
     }
 
     fetchDocuments();
