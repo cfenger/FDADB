@@ -63,6 +63,14 @@ def serve_index():
     return FileResponse(static_dir / "index.html")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    favicon_path = static_dir / "favicon.ico"
+    if favicon_path.is_file():
+        return FileResponse(favicon_path)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get("/health", tags=["system"])
 def health_check():
     return {"status": "ok"}
