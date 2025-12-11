@@ -316,8 +316,9 @@ class RAGService:
                     "role": "system",
                     "content": (
                         "You are a helpful assistant using the provided FDA documents via file_search. "
-                        "Every time you state a fact that comes from one or more documents, you MUST add inline citations like [1], [2] immediately after the sentence or clause. "
-                        "The numbers must match the numbered sources list. If you do not use any documents, do not add citations."
+                        "Every time you state a fact that comes from one or more documents, you MUST add inline citations like [1], [2] directly after the sentence or phrase they support. "
+                        "Do not group citations only at the end of the answer; avoid trailing blocks like [1] [2] [3] on the last line. "
+                        "If you do not use any documents, do not add citations."
                     ),
                 },
                 {"role": "user", "content": question},
@@ -331,7 +332,8 @@ class RAGService:
         except Exception:  # noqa: BLE001
             logger.info("Responses payload (fallback str): %s", response)
 
-        answer_text = self._extract_output_text(response)
+        # First extract citation details and snippets so we can both
+        # build a sources list and map file_ids to citation indices.
         citation_details = self._extract_citations(response)
         snippet_map = self._extract_file_search_snippets(response)
 
@@ -370,47 +372,95 @@ class RAGService:
             if doc:
                 sources.append(doc)
 
-        # Ensure the answer shows inline markers when citations exist
+        # Get the answer text as a single string.
+        answer_text = self._extract_output_text(response)
+
+        # If we have citations but no inline markers yet, distribute them
+        # heuristically across the answer instead of grouping them only
+        # at the very end.
         if citation_payload:
             indices = [c["citation_index"] for c in citation_payload if c.get("citation_index")]
-            indices = indices[:3]
+            indices = indices[:5]
             if indices and not any(f"[{i}]" in answer_text for i in indices):
-                parts = answer_text.split("\n\n")
-                inline_indices = indices
-                if parts:
-                    for idx in range(len(parts) - 1, -1, -1):
-                        if parts[idx].strip():
-                            parts[idx] = parts[idx].rstrip() + " " + " ".join(f"[{i}]" for i in inline_indices)
-                            break
-                    answer_text = "\n\n".join(parts)
+                answer_text = self._distribute_citation_markers(answer_text, indices)
 
         return answer_text, sources, citation_payload
 
     @staticmethod
     def _extract_output_text(response) -> str:
-        # The Responses API exposes a convenience attribute; fall back to manual extraction.
+        # Prefer the convenience attribute if available.
         text = getattr(response, "output_text", None)
-        if text:
+        if isinstance(text, str) and text:
             return text
 
         output = getattr(response, "output", None) or []
         for item in output:
             if isinstance(item, dict):
-                content = item.get("content", [])
+                content_list = item.get("content", []) or []
             else:
-                content = getattr(item, "content", None) or []
-            for block in content:
+                content_list = getattr(item, "content", None) or []
+
+            for block in content_list:
+                # For ResponseOutputText objects, the text is on the
+                # `text` attribute. Dict-like fallbacks are kept for
+                # robustness.
                 if isinstance(block, dict):
-                    text_obj = block.get("text", {}) or {}
+                    value = block.get("text")
                 else:
-                    text_obj = getattr(block, "text", None) or {}
-                if isinstance(text_obj, dict):
-                    value = text_obj.get("value")
-                else:
-                    value = getattr(text_obj, "value", None)
-                if value:
+                    value = getattr(block, "text", None)
+                if isinstance(value, str) and value:
                     return value
         return ""
+
+    @staticmethod
+    def _distribute_citation_markers(answer_text: str, indices: List[int]) -> str:
+        """
+        Heuristically distribute citation markers like [1], [2] across
+        the answer text instead of grouping them only at the very end.
+        """
+        if not answer_text.strip() or not indices:
+            return answer_text
+
+        import re
+
+        text = answer_text
+
+        # Find candidate sentence boundaries as insertion points.
+        # We treat ".", "?" and "!" as sentence terminators, but try to
+        # avoid breaking on decimal points (e.g. "2.5 mg").
+        candidate_positions: List[int] = []
+        pattern = re.compile(r"(?<!\d)([\.!?])(?!\d)")
+        for match in pattern.finditer(text):
+            candidate_positions.append(match.end())
+
+        if not candidate_positions:
+            # Fall back to appending all markers at the very end.
+            tail = " " + " ".join(f"[{i}]" for i in indices)
+            return text.rstrip() + tail
+
+        # Spread citation indices roughly evenly over the available
+        # candidate positions so markers appear throughout the answer.
+        inserts: List[Tuple[int, str]] = []
+        n_candidates = len(candidate_positions)
+        n_indices = len(indices)
+        for idx, citation_index in enumerate(indices, start=1):
+            # Position this marker at a proportional point in the text.
+            # Example for 3 markers: ~25%, ~50%, ~75% of sentence ends.
+            target = int(round(idx * n_candidates / (n_indices + 1))) - 1
+            target = max(0, min(n_candidates - 1, target))
+            pos = candidate_positions[target]
+            inserts.append((pos, f"[{citation_index}]"))
+
+        # Apply inserts from right to left so offsets remain valid.
+        inserts.sort(key=lambda t: t[0], reverse=True)
+        for pos, marker in inserts:
+            if marker in text:
+                continue
+            if pos < 0 or pos > len(text):
+                pos = len(text)
+            text = text[:pos] + marker + text[pos:]
+
+        return text
 
     @staticmethod
     def _extract_file_search_snippets(response) -> dict[str, str]:
