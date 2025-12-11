@@ -262,7 +262,7 @@
       white-space: pre-wrap;
     }
     .highlight {
-      background: rgba(250, 204, 21, 0.3);
+      background: rgba(131, 165, 255, 0.25);
       border-radius: 3px;
       padding: 0 2px;
     }
@@ -401,19 +401,60 @@
 
     function highlightPassage(text, query) {
       if (!text) return "";
-      const escaped = escapeHtml(text);
-      if (!query) return escaped;
-      const terms = query
+      const escapedAll = escapeHtml(text);
+      if (!query) return escapedAll;
+
+      const lowerText = text.toLowerCase();
+      const words = query
         .toLowerCase()
         .split(/\s+/)
-        .filter((t) => t.length > 3);
-      if (!terms.length) return escaped;
-      let result = escaped;
-      terms.forEach((term) => {
-        const pattern = term.replace(/[.*+^${}()|[\]\\]/g, "\\$&");
-        const re = new RegExp(`(${pattern})`, "ig");
-        result = result.replace(re, '<span class="highlight">$1</span>');
-      });
+        .filter((w) => w.length > 3);
+
+      const stopwords = new Set([
+        "this","that","with","from","into","about","their","there","which",
+        "these","those","other","where","when","shall","must","should",
+        "will","could","would","might","have","has","had","been","were",
+        "such","also","only","very","more","most","some","any","each"
+      ]);
+
+      const candidates = words.filter((w) => !stopwords.has(w));
+      if (!candidates.length) return escapedAll;
+
+      const matches = [];
+      const maxMatches = 3;
+
+      for (const term of candidates) {
+        const idx = lowerText.indexOf(term);
+        if (idx !== -1) {
+          matches.push({ start: idx, end: idx + term.length });
+          if (matches.length >= maxMatches) break;
+        }
+      }
+
+      if (!matches.length) return escapedAll;
+
+      matches.sort((a, b) => a.start - b.start);
+      const merged = [matches[0]];
+      for (let i = 1; i < matches.length; i++) {
+        const last = merged[merged.length - 1];
+        const cur = matches[i];
+        if (cur.start <= last.end) {
+          last.end = Math.max(last.end, cur.end);
+        } else {
+          merged.push(cur);
+        }
+      }
+
+      let result = "";
+      let lastIndex = 0;
+      for (const m of merged) {
+        result += escapeHtml(text.slice(lastIndex, m.start));
+        result += '<span class="highlight">' +
+          escapeHtml(text.slice(m.start, m.end)) +
+          "</span>";
+        lastIndex = m.end;
+      }
+      result += escapeHtml(text.slice(lastIndex));
       return result;
     }
 
